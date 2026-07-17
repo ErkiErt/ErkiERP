@@ -1,6 +1,6 @@
 from html import escape
 
-from utils import dimension_text, material_need_lines, work_order_steps
+from utils import dimension_text, material_need_lines, offcut_label, work_order_steps
 
 
 def _positions(count, limit=80):
@@ -128,6 +128,17 @@ def build_printable_cut_sheet(result):
     scheme_html = ''.join(schemes)
     layout_html = ''.join(layout_rows)
     source_label = 'Jääk' if result.get('stock_source') == 'Jääk' else (result.get('material_name') or 'Täisplaat')
+    largest_usable = result.get('largest_usable_offcut')
+    if largest_usable:
+        offcut_html = (
+            '<p><strong>Suurim taaskasutatav jääk:</strong> '
+            f'{escape(offcut_label(largest_usable))} — märgista ja pane riiulisse.</p>'
+        )
+    else:
+        offcut_html = (
+            '<p><strong>Taaskasutatav jääk:</strong> ei teki (allesjääv materjal on '
+            'liiga väike kasutamiseks).</p>'
+        )
     return f'''<!doctype html>
 <html lang="et"><head><meta charset="utf-8"><title>Lõikeleht</title>
 <style>
@@ -160,6 +171,7 @@ li {{ margin:1.2mm 0; }} .no-print {{ margin-bottom:4mm; }}
 {layout_html}
 <p><strong>Suund:</strong> {rotation}</p>
 <p><strong>Lõiked:</strong> {result['longitudinal_cut_count']} piki + {result['cross_cut_count']} risti</p>
+{offcut_html}
 </section><section class="box"><h2>Tööjärjekord</h2><ol>{step_html}</ol></section></div>
 <h2>Lõikeskeem</h2><div class="schemes">{scheme_html}</div>
 </body></html>'''

@@ -159,8 +159,14 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(app.title[0].value, 'Erki Saagimise kalkulaator')
             self.assertEqual(result['handling_sec'], 500 * 20)
             self.assertLess(result['handling_sec'], result['cutting_time_sec'])
-            self.assertEqual(result['billable_sec'], 410 * 60)
-            self.assertEqual(result['work_fee_eur'], 410.0)
+            # Detail (2740 mm) on lühem kui plaat (3000 mm), seega valitakse
+            # jäägisäästlik cross-first strateegia: enne lõigatakse detail
+            # pikkusesse (üks täislaiune ristlõige, mis jätab kasutatava
+            # 1500×253 mm otsajäägi) ja alles siis ribastatakse. See lühendab
+            # pikilõike teekonda ja alandab töötasu 410 → 390 minutit.
+            self.assertEqual(result['cut_strategy'], 'cross')
+            self.assertEqual(result['billable_sec'], 390 * 60)
+            self.assertEqual(result['work_fee_eur'], 390.0)
             page_text = '\n'.join(item.value for item in app.markdown)
             self.assertIn('**Lähtematerjal:** PE300 (PE-HD)', page_text)
             self.assertIn('**Paksus:** 10 mm', page_text)
@@ -683,6 +689,90 @@ class PresentationAndHistoryTests(unittest.TestCase):
     def test_blank_actual_time_remains_blank(self):
         row = build_pending_save_row({}, self.result, self.result['blade']['blade'], False, None, None)
         self.assertIsNone(row['tegelik_aeg_sek'])
+
+
+class OffcutStrategyTests(unittest.TestCase):
+    """Regressioonitestid jäägisäästliku lõikestrateegia jaoks."""
+
+    def test_short_detail_uses_cross_first_and_leaves_full_width_remnant(self):
+        # Detail on plaadist selgelt lühem → tuleks enne pikkusesse lõigata,
+        # et suur täislaiune otsajääk eralduks tervikuna.
+        from core import choose_offcut_strategy, is_usable_offcut
+        result = build_orientation_result(
+            LARGE_BLADE, CalcInput(10, 1500, 3000, 55, 2000, 24), 55, 2000
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['cut_strategy'], 'cross')
+        offcuts = result['full_offcuts']
+        end = next((o for o in offcuts if o['name'] == 'Otsajääk'), None)
+        self.assertIsNotNone(end)
+        # Otsajääk on täislaiune (kogu plaadi laius), mitte kitsas riba.
+        self.assertAlmostEqual(end['width_mm'], 1500, delta=1.0)
+        self.assertTrue(is_usable_offcut(end))
+        # Suurim taaskasutatav jääk on määratud ja kasutatav.
+        self.assertIsNotNone(result['largest_usable_offcut'])
+        self.assertTrue(is_usable_offcut(result['largest_usable_offcut']))
+
+    def test_area_is_invariant_between_strategies(self):
+        # Mõlema strateegia jäägi kogupindala peab olema identne — muutub
+        # ainult kuju, mitte materjalikulu.
+        from core import _strategy_offcuts
+        cross = _strategy_offcuts(1500, 3000, 1455, 2747, 'cross')
+        rip = _strategy_offcuts(1500, 3000, 1455, 2747, 'rip')
+        self.assertAlmostEqual(
+            sum(o['area_m2'] for o in cross),
+            sum(o['area_m2'] for o in rip),
+            places=6,
+        )
+
+    def test_full_length_detail_has_no_end_remnant_and_time_unchanged(self):
+        # Täispikk detail (detail_l == raw_l): otsajääki pole, strateegia ei tohi
+        # lõikeaega muuta võrreldes vana rip-first käitumisega.
+        below = build_best_result_for_blade(LARGE_BLADE, CalcInput(79.9, 100, 2000, 50, 2000, 1))
+        doubled = build_best_result_for_blade(LARGE_BLADE, CalcInput(80, 100, 2000, 50, 2000, 1))
+        self.assertAlmostEqual(doubled['cutting_time_sec'], below['cutting_time_sec'] * 2)
+        # Terve otsariba puudub, seega yksik jääk on ainult küljeriba.
+        self.assertTrue(all(o['name'] != 'Otsajääk' for o in below['full_offcuts']))
+
+    def test_sliver_offcut_is_not_counted_as_usable(self):
+        from core import is_usable_offcut
+        sliver = {'name': 'Küljeriba', 'width_mm': 20.0, 'length_mm': 3000.0,
+                  'area_m2': 20.0 * 3000.0 / 1_000_000.0}
+        self.assertFalse(is_usable_offcut(sliver))
+        good = {'name': 'Otsajääk', 'width_mm': 1500.0, 'length_mm': 300.0,
+                'area_m2': 1500.0 * 300.0 / 1_000_000.0}
+        self.assertTrue(is_usable_offcut(good))
+
+    def test_remnant_stock_produces_partial_offcuts(self):
+        # Jäägist (stock_source='Jääk') lõigates peab süsteem samuti arvutama,
+        # milline osa jäägist jääb taaskasutatavaks.
+        result = build_best_result_for_blade(
+            LARGE_BLADE,
+            CalcInput(12, 1000, 2000, 200, 300, 4, stock_source='Jääk', max_stock_count=1),
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result['stock_source'], 'Jääk')
+        self.assertIn('cut_strategy', result)
+
+    def test_work_order_reflects_cross_first_strategy(self):
+        from utils import work_order_steps
+        result = build_orientation_result(
+            LARGE_BLADE, CalcInput(10, 1500, 3000, 55, 2000, 24), 55, 2000
+        )
+        steps = ' '.join(work_order_steps(result))
+        self.assertEqual(result['cut_strategy'], 'cross')
+        self.assertIn('esmalt pikkusesse', steps)
+
+    def test_sort_prefers_larger_usable_offcut_on_area_tie(self):
+        # Sama materjalikulu ja plaadiarvu korral eelistatakse suuremat
+        # taaskasutatavat jääki.
+        from core import result_sort_key
+        base = build_best_result_for_blade(LARGE_BLADE, inp())
+        a = dict(base)
+        b = dict(base)
+        a['largest_usable_offcut'] = {'name': 'Otsajääk', 'width_mm': 1500, 'length_mm': 500, 'area_m2': 0.75}
+        b['largest_usable_offcut'] = {'name': 'Otsajääk', 'width_mm': 1500, 'length_mm': 200, 'area_m2': 0.30}
+        self.assertLess(result_sort_key(a), result_sort_key(b))
 
 
 if __name__ == '__main__':

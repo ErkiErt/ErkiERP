@@ -9,6 +9,11 @@ SAW_HOURLY_RATE_EUR = 60.0
 TRIM_REMOVAL_MM = 1.0
 ROTATION_PREFERRED_MAX_MM = 1000.0
 MIN_STRIP_WIDTH_MM = 4.0
+# Jääk loetakse taaskasutatavaks ainult siis, kui sinna mahub reaalselt tulevane
+# detail: lühem külg vähemalt USABLE_OFFCUT_MIN_SHORT_MM ja pindala vähemalt
+# USABLE_OFFCUT_MIN_AREA_M2. Kitsad ribakesed jäävad praagiks, mitte laojäägiks.
+USABLE_OFFCUT_MIN_SHORT_MM = 100.0
+USABLE_OFFCUT_MIN_AREA_M2 = 0.05
 NARROW_STRIP_MAX_WIDTH_MM = 6.0
 NARROW_STRIP_MIN_THICKNESS_MM = 2.0
 NARROW_STRIP_TIME_FACTOR = 2.0
@@ -178,15 +183,77 @@ def _partial_layout(count, max_cols, max_rows, piece_w, piece_l, kerf, trim_widt
     return min(options, key=lambda x: (round(x['area_m2'], 9), x['empty_positions'], x['rows'] + x['cols']))
 
 
-def _simple_offcuts(raw_w, raw_l, used_w, used_l):
-    offcuts = []
+def is_usable_offcut(offcut):
+    """Jääk on kasutatav ainult siis, kui sinna mahub reaalselt tulevane detail."""
+    return (
+        min(offcut['width_mm'], offcut['length_mm']) >= USABLE_OFFCUT_MIN_SHORT_MM
+        and offcut['area_m2'] >= USABLE_OFFCUT_MIN_AREA_M2
+    )
+
+
+def _strategy_offcuts(raw_w, raw_l, used_w, used_l, strategy):
+    """L-kujulise jäägi kaks lubatud giljotiin-dekompositsiooni.
+
+    'cross'  -> esmalt täislaiuses ristlõige y=used_l juures: eraldub üks puhas
+                täislaiuses otsajääk (raw_w × end), seejärel ribastatakse ainult
+                lõigatud plaadiosa (küljeriba jääb side × used_l).
+    'rip'    -> esmalt täispikk pikilõige x=used_w juures: eraldub täispikk
+                küljeriba (side × raw_l), seejärel lõigatakse otsajääk
+                (used_w × end).
+
+    Mõlema variandi jäägi kogupindala on identne; erineb ainult kuju ja seega
+    suurima üksikjäägi kasutatavus.
+    """
     side = max(0.0, raw_w - used_w)
     end = max(0.0, raw_l - used_l)
-    if side > 0.01:
-        offcuts.append({'name': 'Küljeriba', 'width_mm': side, 'length_mm': raw_l, 'area_m2': area_m2(side, raw_l)})
-    if end > 0.01 and used_w > 0:
-        offcuts.append({'name': 'Otsajääk', 'width_mm': used_w, 'length_mm': end, 'area_m2': area_m2(used_w, end)})
+    offcuts = []
+    if strategy == 'cross':
+        if end > 0.01:
+            offcuts.append({'name': 'Otsajääk', 'width_mm': raw_w, 'length_mm': end, 'area_m2': area_m2(raw_w, end)})
+        if side > 0.01 and used_l > 0:
+            offcuts.append({'name': 'Küljeriba', 'width_mm': side, 'length_mm': used_l, 'area_m2': area_m2(side, used_l)})
+    elif strategy == 'rip':
+        if side > 0.01:
+            offcuts.append({'name': 'Küljeriba', 'width_mm': side, 'length_mm': raw_l, 'area_m2': area_m2(side, raw_l)})
+        if end > 0.01 and used_w > 0:
+            offcuts.append({'name': 'Otsajääk', 'width_mm': used_w, 'length_mm': end, 'area_m2': area_m2(used_w, end)})
+    else:
+        raise ValueError(f'Tundmatu lõikestrateegia: {strategy}')
     return offcuts
+
+
+def _largest_usable_area(offcuts):
+    usable = [o['area_m2'] for o in offcuts if is_usable_offcut(o)]
+    if usable:
+        return max(usable)
+    # Kui ükski jääk ei ületa kasutatavuse läve, võrdle suurima olemasoleva järgi,
+    # et valik jääks siiski määratletuks.
+    return max((o['area_m2'] for o in offcuts), default=0.0)
+
+
+def choose_offcut_strategy(raw_w, raw_l, used_w, used_l):
+    """Vali giljotiin-esimese lõike suund, mis jätab suurima üksikjäägi.
+
+    Tagastab (strateegia, jäägid) kus jäägid on suuruse järjekorras (suurim ees).
+    Materjalikulu on mõlemas variandis sama — optimeeritakse ainult jäägi kuju.
+    Võrdsuse korral eelistatakse 'cross' (rist esimesena), sest see vastab
+    kasutaja töövoole „lõika detail enne pikkusesse ja siis ribasta".
+    """
+    cross = _strategy_offcuts(raw_w, raw_l, used_w, used_l, 'cross')
+    rip = _strategy_offcuts(raw_w, raw_l, used_w, used_l, 'rip')
+    if not cross and not rip:
+        return 'cross', []
+    if _largest_usable_area(cross) >= _largest_usable_area(rip):
+        chosen, strategy = cross, 'cross'
+    else:
+        chosen, strategy = rip, 'rip'
+    chosen = sorted(chosen, key=lambda o: o['area_m2'], reverse=True)
+    return strategy, chosen
+
+
+def _simple_offcuts(raw_w, raw_l, used_w, used_l):
+    """Tagasiühilduvus: tagastab kasutatavuse järgi parima dekompositsiooni."""
+    return choose_offcut_strategy(raw_w, raw_l, used_w, used_l)[1]
 
 
 def dust_bag_change_count(thickness_mm, stock_count, full_length_ripping):
@@ -262,14 +329,38 @@ def build_orientation_result(blade, inp, detail_w, detail_l):
     kerf_area = min(max(0.0, required_area - net_area), calculated_kerf)
     losses_area = max(0.0, required_area - net_area)
 
+    # Vali jäägi-optimaalne lõikestrateegia täisplaadile ja osalisele plaadile.
+    # 'cross' = lõika detail enne pikkusesse (täislaiune ristlõige), siis ribasta.
+    # 'rip'   = täispikk pikilõige enne, siis ristlõige.
+    full_strategy, full_offcuts_choice = choose_offcut_strategy(
+        inp.raw_width_mm, inp.raw_length_mm, full_used_w, full_used_l
+    )
+    if partial:
+        partial_strategy, partial_offcuts_choice = choose_offcut_strategy(
+            partial_w, partial_l,
+            trim_width + used_size_mm(partial_cols, detail_w, kerf),
+            trim_length + used_size_mm(partial_rows, detail_l, kerf),
+        )
+    else:
+        partial_strategy, partial_offcuts_choice = 'cross', []
+
+    # Ristlõike ulatus sõltub strateegiast: cross-first juures lõigatakse rist
+    # täislaiuses (raw_width), rip-first juures ainult kasutatud laiuses.
+    full_cross_span = inp.raw_width_mm if full_strategy == 'cross' else full_used_w
+    partial_cross_span = partial_w if partial_strategy == 'cross' else partial_w
+    # Pikilõike ulatus: cross-first juures ainult kasutatud pikkuses (full_used_l),
+    # rip-first juures täispikkuses (raw_length).
+    full_rip_span = full_used_l if full_strategy == 'cross' else inp.raw_length_mm
+    partial_rip_span = partial_l
+
     spm = get_sec_per_meter(inp.thickness_mm)
     rip_forward_sec = (
-        full_count * full_long * inp.raw_length_mm
-        + extra_count * partial_long * partial_l
+        full_count * full_long * full_rip_span
+        + extra_count * partial_long * partial_rip_span
     ) / 1000.0 * spm
     cross_forward_sec = (
-        full_count * full_cross * full_used_w
-        + extra_count * partial_cross * partial_w
+        full_count * full_cross * full_cross_span
+        + extra_count * partial_cross * partial_cross_span
     ) / 1000.0 * spm
     narrow_strip_time_factor = NARROW_STRIP_TIME_FACTOR if narrow_strip else 1.0
     thick_material_time_factor = (
@@ -331,8 +422,32 @@ def build_orientation_result(blade, inp, detail_w, detail_l):
         total_billable_sec = work_fee / SAW_HOURLY_RATE_EUR * 3600.0
     precision_surcharge_eur = max(0.0, work_fee - normal_quote_fee) if inp.precision_cut else 0.0
 
-    full_offcuts = _simple_offcuts(inp.raw_width_mm, inp.raw_length_mm, full_used_w, full_used_l)
-    usable_offcut_area = sum(o['area_m2'] for o in full_offcuts) * full_count
+    full_offcuts = full_offcuts_choice
+    partial_offcuts = partial_offcuts_choice
+    # Kasutatav jäägipindala loeb ainult neid tükke, mis ületavad kasutatavuse
+    # läve (min külg + min pindala) — kitsad ribakesed on praak, mitte laojääk.
+    usable_full_offcuts = [o for o in full_offcuts if is_usable_offcut(o)]
+    usable_partial_offcuts = [o for o in partial_offcuts if is_usable_offcut(o)]
+    usable_offcut_area = (
+        sum(o['area_m2'] for o in usable_full_offcuts) * full_count
+        + sum(o['area_m2'] for o in usable_partial_offcuts) * extra_count
+    )
+    largest_usable_candidates = (
+        [(o, full_count) for o in usable_full_offcuts if full_count]
+        + [(o, extra_count) for o in usable_partial_offcuts if extra_count]
+    )
+    largest_any_candidates = (
+        [o for o in full_offcuts if full_count]
+        + [o for o in partial_offcuts if extra_count]
+    )
+    largest_usable_offcut = (
+        max((o for o, _ in largest_usable_candidates), key=lambda o: o['area_m2'])
+        if largest_usable_candidates else None
+    )
+    largest_any_offcut = (
+        max(largest_any_candidates, key=lambda o: o['area_m2'])
+        if largest_any_candidates else None
+    )
     rotation_over_1m = bool(max(inp.detail_width_mm, inp.detail_length_mm) > ROTATION_PREFERRED_MAX_MM and detail_w != inp.detail_width_mm)
     return {
         'blade': blade,
@@ -373,9 +488,12 @@ def build_orientation_result(blade, inp, detail_w, detail_l):
         'usable_offcut_area_m2': usable_offcut_area,
         'non_usable_offcut_area_m2': max(0.0, losses_area - usable_offcut_area),
         'full_offcuts': full_offcuts,
-        'partial_offcuts': [],
-        'largest_usable_offcut': max(full_offcuts, key=lambda o: o['area_m2']) if full_offcuts and full_count else None,
-        'largest_any_offcut': max(full_offcuts, key=lambda o: o['area_m2']) if full_offcuts and full_count else None,
+        'partial_offcuts': partial_offcuts,
+        'cut_strategy': full_strategy,
+        'partial_cut_strategy': partial_strategy,
+        'kerf_mm': kerf,
+        'largest_usable_offcut': largest_usable_offcut,
+        'largest_any_offcut': largest_any_offcut,
         'longitudinal_cut_count': long_total,
         'cross_cut_count': cross_total,
         'total_cut_count': long_total + cross_total,
@@ -422,11 +540,19 @@ def build_orientation_result(blade, inp, detail_w, detail_l):
     }
 
 
+def _largest_usable_offcut_area(result):
+    offcut = result.get('largest_usable_offcut')
+    return offcut['area_m2'] if offcut else 0.0
+
+
 def result_sort_key(result):
     return (
         round(result['material_needed_area_m2'], 6),
         result['full_sheet_count'],
         int(result.get('rotation_over_1m', False)),
+        # Sama materjalikulu korral eelista lahendust, mis jätab suurima
+        # taaskasutatava jäägi (negatiivne — suurem pindala on parem).
+        -round(_largest_usable_offcut_area(result), 6),
         result['total_sec'],
         result['total_cut_count'],
         0 if result['blade']['is_default'] else 1,

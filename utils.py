@@ -80,15 +80,31 @@ def offcut_label(offcut):
 
 
 def work_order_steps(result):
-    """Build the same operator sequence for the screen and printable cut sheet."""
-    steps = [
-        'Tee tasanduslõige ainult skeemil näidatud lõikesuunal.',
-        'Lõika esmalt pikisuunalised ribad.',
-    ]
+    """Build the same operator sequence for the screen and printable cut sheet.
+
+    Lõikejärjekord sõltub valitud strateegiast:
+      - 'cross' (jäägisäästlik, kui detail on plaadist lühem): esmalt lõigatakse
+        detail pikkusesse (täislaiune ristlõige, mis jätab kasutatava otsajäägi),
+        alles siis ribastatakse. Nii kulub materjali kokkuhoidlikult ja alles
+        jääv otsajääk on terve, taaskasutatav tükk.
+      - 'rip' (kui detail on täispikk või ribastamine jätab suurema jäägi):
+        esmalt pikilõiked, seejärel ristlõiked mõõtu.
+    """
+    strategy = result.get('cut_strategy', 'rip')
+    has_cross = result.get('cross_cut_count', 0) > 0
+    steps = ['Tee tasanduslõige ainult skeemil näidatud lõikesuunal.']
     if result.get('rotated'):
-        steps.insert(1, 'Kasuta skeemil näidatud 90° pööratud detailipaigutust.')
-    if result.get('cross_cut_count', 0) > 0:
-        steps.append('Pööra ribad 90° ja tee ristlõiked mõõtu.')
+        steps.append('Kasuta skeemil näidatud 90° pööratud detailipaigutust.')
+    if strategy == 'cross' and has_cross:
+        steps.append(
+            'Lõika detail esmalt pikkusesse: tee üks täislaiune ristlõige, et suur '
+            'otsajääk eralduks tervikuna ja jääks taaskasutatavaks.'
+        )
+        steps.append('Ribasta seejärel lõigatud plaadiosa pikisuunas mõõtu.')
+    else:
+        steps.append('Lõika esmalt pikisuunalised ribad.')
+        if has_cross:
+            steps.append('Pööra ribad 90° ja tee ristlõiked mõõtu.')
     steps.append(
         'Too alus või käru sae juurde, sea see sobivale töökõrgusele ja tõsta valmis detailid otse alusele.'
     )

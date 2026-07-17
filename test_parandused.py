@@ -596,6 +596,136 @@ class ApplicationTests(unittest.TestCase):
         self.assertGreater(checked, 500)
 
 
+class SelectionStateTests(unittest.TestCase):
+    """Regressioonitestid plaadi/jäägi valiku session_state ahelale.
+
+    Kaetud on viis valikujärjestust ning nõue, et iga eelneva sammu muutmine
+    teeb varem arvutatud pakkumise kehtetuks (vana tulemus ei jää ripakile).
+    """
+
+    def _select_full_sheet(self, app):
+        next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
+        next(button for button in app.button if button.key == 'choose_group_Kulumiskindel plast').click().run(timeout=30)
+        app.selectbox[0].select('PE500 (PE-HMW)').run(timeout=30)
+        app.selectbox[1].select(20.0).run(timeout=30)
+        app.selectbox[2].select('1000|2000').run(timeout=30)
+        return app
+
+    def _calculate(self, app):
+        next(button for button in app.button if button.label == 'Arvuta pakkumine').click().run(timeout=30)
+        return app
+
+    def test_sequence_1_material_thickness_plate_normal(self):
+        # 1. materjal → paksus → plaat (normaaljuhtum): tulemus arvutub õigesti.
+        app = AppTest.from_file('app.py').run(timeout=30)
+        self._select_full_sheet(app)
+        app.text_input[0].input('100').run(timeout=30)
+        app.text_input[1].input('200').run(timeout=30)
+        app.number_input[0].set_value(10).run(timeout=30)
+        self._calculate(app)
+        self.assertFalse(app.exception)
+        result = app.session_state['best_result']
+        self.assertIsNotNone(result)
+        self.assertEqual(result['stock_source'], 'Täisplaat')
+        self.assertEqual(result['thickness_mm'], 20.0)
+        self.assertEqual(result['material_name'], 'PE500 (PE-HMW)')
+        self.assertEqual(result['detail_count'], 10)
+
+    def test_sequence_2_material_then_remnant(self):
+        # 2. materjal → jääk: kasutaja valib olemasoleva jäägi laost.
+        app = AppTest.from_file('app.py').run(timeout=30)
+        next(button for button in app.button if button.key == 'choose_stock_Jääk').click().run(timeout=30)
+        for widget, value in zip(app.text_input, ('5', '2000', '3000', '100', '200')):
+            widget.input(value).run(timeout=30)
+        app.number_input[0].set_value(10).run(timeout=30)
+        self._calculate(app)
+        self.assertFalse(app.exception)
+        result = app.session_state['best_result']
+        self.assertIsNotNone(result)
+        self.assertEqual(result['stock_source'], 'Jääk')
+        self.assertEqual(result['thickness_mm'], 5.0)
+        self.assertEqual(result['raw_width_mm'], 2000.0)
+        self.assertEqual(result['raw_length_mm'], 3000.0)
+
+    def test_sequence_3_remnant_back_to_plate_clears_result(self):
+        # 3. jääk → tagasi plaadile: jäägist loobumine kustutab vana tulemuse
+        # ja tühjendab jäägi mõõdud, et miski ei jääks ripakile.
+        app = AppTest.from_file('app.py').run(timeout=30)
+        next(button for button in app.button if button.key == 'choose_stock_Jääk').click().run(timeout=30)
+        for widget, value in zip(app.text_input, ('5', '2000', '3000', '100', '200')):
+            widget.input(value).run(timeout=30)
+        app.number_input[0].set_value(10).run(timeout=30)
+        self._calculate(app)
+        self.assertIsNotNone(app.session_state['best_result'])
+
+        next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state['stock_source'], 'Täisplaat')
+        self.assertIsNone(app.session_state['best_result'])
+        self.assertEqual(app.session_state['raw_width_mm'], '')
+        self.assertEqual(app.session_state['raw_length_mm'], '')
+        self.assertIsNone(app.session_state['material_group'])
+
+    def test_sequence_4_changing_quantity_recomputes(self):
+        # 4. koguse muutmine PÄRAST valikut peab ümber arvutama, mitte hoidma
+        # vana tulemust.
+        app = AppTest.from_file('app.py').run(timeout=30)
+        self._select_full_sheet(app)
+        app.text_input[0].input('100').run(timeout=30)
+        app.text_input[1].input('200').run(timeout=30)
+        app.number_input[0].set_value(10).run(timeout=30)
+        self._calculate(app)
+        first = app.session_state['best_result']
+        self.assertEqual(first['detail_count'], 10)
+        first_fee = first['work_fee_eur']
+
+        app.number_input[0].set_value(50).run(timeout=30)
+        self._calculate(app)
+        second = app.session_state['best_result']
+        self.assertEqual(second['detail_count'], 50)
+        self.assertGreaterEqual(second['work_fee_eur'], first_fee)
+
+    def test_sequence_5_changing_dimensions_recomputes(self):
+        # 5. mõõtude muutmine PÄRAST valikut — vana tulemus ei tohi rippuda.
+        app = AppTest.from_file('app.py').run(timeout=30)
+        self._select_full_sheet(app)
+        app.text_input[0].input('100').run(timeout=30)
+        app.text_input[1].input('200').run(timeout=30)
+        app.number_input[0].set_value(10).run(timeout=30)
+        self._calculate(app)
+        first = app.session_state['best_result']
+        self.assertEqual(first['original_detail_width_mm'], 100.0)
+        self.assertEqual(first['original_detail_length_mm'], 200.0)
+
+        app.text_input[0].input('250').run(timeout=30)
+        app.text_input[1].input('400').run(timeout=30)
+        self._calculate(app)
+        second = app.session_state['best_result']
+        self.assertEqual(second['original_detail_width_mm'], 250.0)
+        self.assertEqual(second['original_detail_length_mm'], 400.0)
+
+    def test_upstream_change_invalidates_stale_result(self):
+        # Iga eelneva valikusammu muutmine teeb arvutatud tulemuse kehtetuks.
+        for change in ('group', 'material', 'thickness', 'format'):
+            with self.subTest(change=change):
+                app = AppTest.from_file('app.py').run(timeout=30)
+                self._select_full_sheet(app)
+                app.text_input[0].input('100').run(timeout=30)
+                app.text_input[1].input('200').run(timeout=30)
+                app.number_input[0].set_value(10).run(timeout=30)
+                self._calculate(app)
+                self.assertIsNotNone(app.session_state['best_result'])
+                if change == 'group':
+                    next(b for b in app.button if b.key == 'choose_group_Konstruktsioonplast').click().run(timeout=30)
+                elif change == 'material':
+                    app.selectbox[0].select('PE1000 (PE-UHMW)').run(timeout=30)
+                elif change == 'thickness':
+                    app.selectbox[1].select(30.0).run(timeout=30)
+                else:
+                    app.selectbox[2].select('1000|3000').run(timeout=30)
+                self.assertIsNone(app.session_state['best_result'], change)
+
+
 class PresentationAndHistoryTests(unittest.TestCase):
     def setUp(self):
         self.result = build_best_result_for_blade(LARGE_BLADE, inp())
@@ -773,6 +903,58 @@ class OffcutStrategyTests(unittest.TestCase):
         a['largest_usable_offcut'] = {'name': 'Otsajääk', 'width_mm': 1500, 'length_mm': 500, 'area_m2': 0.75}
         b['largest_usable_offcut'] = {'name': 'Otsajääk', 'width_mm': 1500, 'length_mm': 200, 'area_m2': 0.30}
         self.assertLess(result_sort_key(a), result_sort_key(b))
+
+
+class ArchitectureLayerTests(unittest.TestCase):
+    """Testid kihilise arhitektuuri jaoks: äriloogikat saab kontrollida
+    Streamlitit käivitamata ning sõltuvussuund ui → application → domain püsib.
+    """
+
+    def test_domain_calculations_do_not_import_streamlit(self):
+        import subprocess
+        import sys
+        # Eraldi protsessis: domeenikihi import ei tohi Streamlitit kaasa tuua.
+        result = subprocess.run(
+            [sys.executable, '-c',
+             'import sys, domain.calculations; '
+             'assert "streamlit" not in sys.modules, "domeen ei tohi Streamlitit importida"'],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_domain_and_compat_core_expose_same_engine(self):
+        import domain.calculations as calculations
+        import core
+        # Compat-kiht re-ekspordib domeeni sama funktsiooni, mitte koopiat.
+        self.assertIs(core.build_best_result, calculations.build_best_result)
+        self.assertIs(core.CalcInput, calculations.CalcInput)
+
+    def test_repositories_back_the_compat_material_module(self):
+        import repositories.material_catalog as catalog
+        import materials
+        self.assertIs(materials.load_sheet_catalog, catalog.load_sheet_catalog)
+        self.assertTrue(catalog.load_sheet_catalog())
+
+    def test_quote_service_computes_best_result_without_ui(self):
+        from application.quote_service import compute_quote, single_stock_capacity
+        best, blade_results = compute_quote(inp(count=10))
+        self.assertIsNotNone(best)
+        self.assertEqual(best['detail_count'], 10)
+        # Ketaste alternatiividele on lisatud põhjendused.
+        self.assertTrue(any(r and 'blade_reason' in r for r in blade_results))
+        # Hinnastuse alammäär on rakendatud (hinnastusaeg ei alane tööajast).
+        self.assertGreaterEqual(best['billable_sec'], best['total_sec'] * 1.05)
+
+    def test_quote_service_returns_none_when_detail_does_not_fit(self):
+        from application.quote_service import compute_quote
+        too_big = CalcInput(5, 100, 100, 500, 500, 1, stock_source='Jääk', max_stock_count=1)
+        best, _ = compute_quote(too_big)
+        self.assertIsNone(best)
+
+    def test_quote_service_single_stock_capacity_matches_domain(self):
+        from application.quote_service import single_stock_capacity
+        remnant = CalcInput(5, 2000, 3000, 100, 2000, 100, stock_source='Jääk', max_stock_count=1)
+        self.assertEqual(single_stock_capacity(remnant), max_single_stock_capacity(remnant))
 
 
 if __name__ == '__main__':

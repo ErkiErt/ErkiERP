@@ -21,7 +21,8 @@ history_module = importlib.reload(history_module)
 print_sheet_module = importlib.reload(print_sheet_module)
 ui_module = importlib.reload(ui_module)
 
-from core import BLADES, MAX_DETAIL_COUNT, CalcInput, add_blade_reasons, apply_monotonic_quote_floor, build_best_result_for_blade, choose_best_result, max_single_stock_capacity, validate_input_values
+from core import MAX_DETAIL_COUNT, CalcInput, validate_input_values
+from application.quote_service import compute_quote, single_stock_capacity
 from history import build_pending_save_row, build_query_memory_row, load_history, load_query_memory, save_history_row, save_query_memory_row
 from materials import articles_for_selection, formats_for_selection, groups, materials_for_group, thickness_label, thicknesses_for_material
 from print_sheet import build_printable_cut_sheet
@@ -99,11 +100,19 @@ def clear_query():
     st.session_state.last_query_id = None
 
 
+def invalidate_result():
+    # Iga eelneva sammu muutmine teeb varem arvutatud pakkumise kehtetuks, et
+    # vana tulemus ei jääks uue sisendi taustal ripakile.
+    st.session_state.best_result = None
+    st.session_state.last_query_id = None
+
+
 def choose_material_group(group):
     if st.session_state.material_group != group:
         st.session_state.material_name = None
         st.session_state.catalog_thickness_mm = None
         st.session_state.sheet_format_key = None
+        invalidate_result()
     st.session_state.material_group = group
 
 
@@ -229,9 +238,9 @@ with sales_tab:
                 st.caption('Vali ülal materjaligrupp.')
             exact_col, thickness_col, format_col = st.columns(3)
             with exact_col:
-                st.selectbox('Täpne materjal', material_options, index=None, placeholder='Kirjuta või vali materjal', key='material_name', disabled=not material_options)
+                st.selectbox('Täpne materjal', material_options, index=None, placeholder='Kirjuta või vali materjal', key='material_name', disabled=not material_options, on_change=invalidate_result)
             with thickness_col:
-                st.selectbox('Paksus', thickness_options, index=None, format_func=thickness_label, placeholder='Kirjuta või vali paksus', key='catalog_thickness_mm', disabled=not thickness_options)
+                st.selectbox('Paksus', thickness_options, index=None, format_func=thickness_label, placeholder='Kirjuta või vali paksus', key='catalog_thickness_mm', disabled=not thickness_options, on_change=invalidate_result)
             with format_col:
                 st.selectbox(
                     'Plaadiformaat',
@@ -241,6 +250,7 @@ with sales_tab:
                     placeholder='Kirjuta või vali formaat',
                     key='sheet_format_key',
                     disabled=not format_options,
+                    on_change=invalidate_result,
                 )
     elif st.session_state.stock_source == 'Jääk':
         st.markdown('#### 2. Sisesta jäägi ja detaili mõõdud')
@@ -326,10 +336,9 @@ with sales_tab:
                 st.error(error)
             st.session_state.best_result = None
         else:
-            blade_results = [build_best_result_for_blade(blade, inp) for blade in BLADES]
-            best = choose_best_result(blade_results)
+            best, _blade_results = compute_quote(inp)
             if best is None:
-                capacity = max_single_stock_capacity(inp) if st.session_state.stock_source == 'Jääk' else 0
+                capacity = single_stock_capacity(inp) if st.session_state.stock_source == 'Jääk' else 0
                 if capacity and inp.detail_count > capacity:
                     st.error(
                         f'Ühest sisestatud jäägist saab valmistada kuni {capacity} detaili. '
@@ -339,8 +348,6 @@ with sales_tab:
                     st.error('Detail ei mahu antud toorikusse või materjalipaksus ei sobi valitud lõikelaiusega.')
                 st.session_state.best_result = None
             else:
-                best = apply_monotonic_quote_floor(best, inp)
-                add_blade_reasons(blade_results, best)
                 best['material_group'] = st.session_state.material_group
                 best['material_name'] = st.session_state.material_name
                 best['selected_format_label'] = chosen_format['label'] if chosen_format else None

@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 import streamlit as st
 
+from application.quote_service import build_price_summary
 from utils import dimension_text, fmt, material_need_lines, offcut_label, sec_to_minsec, work_order_steps
 
 BLUE = '#1f6fb2'
@@ -21,10 +22,27 @@ GREEN = '#9ccc65'
 
 def render_sales_result(result):
     st.subheader('Pakkumise kokkuvõte')
-    c1, c2, c3 = st.columns(3)
-    c1.metric('Tellitud detaile', f"{result['detail_count']} tk")
-    c2.metric('Arvutuslik tööaeg', sec_to_minsec(result['total_sec']))
-    c3.metric('Tööraha', fmt(result['work_fee_eur'], 2, '€'))
+    top1, top2 = st.columns(2)
+    top1.metric('Tellitud detaile', f"{result['detail_count']} tk")
+    top2.metric('Arvutuslik tööaeg', sec_to_minsec(result['total_sec']))
+
+    summary = build_price_summary(result)
+    st.markdown('#### Hinna jaotus')
+    price_cols = st.columns(2 if summary['has_extra_work'] else 1)
+    # „Tööraha" tähendab ainult saagimistööd — pealdis ütleb selle üheselt välja,
+    # et kasutajale ei jääks muljet, nagu sisaldaks summa ka materjali maksumust.
+    price_cols[0].metric('Tööraha (saagimine, ei sisalda materjali)', fmt(summary['base_work_fee_eur'], 2, '€'))
+    if summary['has_extra_work']:
+        price_cols[1].metric('Võimalikud lisatööd (täpsuslõikus)', fmt(summary['precision_surcharge_eur'], 2, '€'))
+
+    if summary['material_cost_known']:
+        st.metric('Materjali hind', fmt(summary['material_cost_eur'], 2, '€'))
+    else:
+        st.metric('Materjali kogus', fmt(summary['material_area_m2'], 3, 'm²'))
+        st.caption('Materjali €/m² hinda kalkulaator ei arvuta — küsi materjali maksumus eraldi hinnapakkumisega.')
+
+    total_label = 'Hind kokku (sisaldab materjali)' if summary['total_includes_material'] else 'Hind kokku (ilma materjalita)'
+    st.metric(total_label, fmt(summary['total_eur'], 2, '€'))
     st.caption('Tööraha sisaldab hinnastamisvaru ja arvestusaja ümardamist ülespoole.')
 
     st.markdown('#### Materjali vajadus')
@@ -32,7 +50,6 @@ def render_sales_result(result):
         st.markdown(f'- **{line}**')
     if result.get('partial_sheet_count') and result.get('stock_source') != 'Jääk':
         st.caption('Enne täisplaadi lõikust kontrolli, kas sobivat jääki pole riiulis või boksides.')
-    st.metric('Materjalikulu', fmt(result['material_needed_area_m2'], 3, 'm²'))
     if result['precision_cut']:
         if result.get('small_precision_fixed_price'):
             st.info(

@@ -107,13 +107,13 @@ def invalidate_result():
     st.session_state.last_query_id = None
 
 
-def choose_material_group(group):
-    if st.session_state.material_group != group:
-        st.session_state.material_name = None
-        st.session_state.catalog_thickness_mm = None
-        st.session_state.sheet_format_key = None
-        invalidate_result()
-    st.session_state.material_group = group
+def on_material_group_change():
+    # Grupi vahetus lähtestab allavoolu valikud (materjal, paksus, formaat), et
+    # vana valik ei jääks uue grupi taustale kehtima ega arvutus ripakile.
+    st.session_state.material_name = None
+    st.session_state.catalog_thickness_mm = None
+    st.session_state.sheet_format_key = None
+    invalidate_result()
 
 
 def choose_stock_source(source):
@@ -133,8 +133,6 @@ st.caption('Versioon 1 · kiire müügipakkumine ja eraldi tehniline lõikeleht.
 st.markdown(
     """
     <style>
-    [class*="st-key-group_card_"] { border-left: .35rem solid #0f7894 !important; }
-    [class*="st-key-group_card_"] p { margin-bottom: .3rem; }
     [class*="st-key-stock_card_"] { border-top: .3rem solid #0f7894 !important; }
     </style>
     """,
@@ -177,31 +175,6 @@ with sales_tab:
     group_options = groups(require_format=require_catalog_format) if full_sheet_selected else []
     if st.session_state.material_group not in group_options:
         st.session_state.material_group = None
-    if full_sheet_selected or not source_selected:
-        st.markdown('#### 2. Vali materjaligrupp')
-    card_groups = [group for group in GROUP_CARD_CONTENT if group in group_options]
-    if not source_selected:
-        st.caption('Vali esmalt lähtematerjal: täisplaat või jääk.')
-        card_groups = list(GROUP_CARD_CONTENT)
-    for row_start in range(0, len(card_groups), 3):
-        card_columns = st.columns(3, gap='medium')
-        for column, group in zip(card_columns, card_groups[row_start:row_start + 3]):
-            content = GROUP_CARD_CONTENT[group]
-            with column:
-                with st.container(border=True, height=205, key=f'group_card_{row_start}_{group}'):
-                    st.markdown(f'**{group}**')
-                    st.caption(content['description'])
-                    st.markdown(content['materials'])
-                    selected = st.session_state.material_group == group
-                    st.button(
-                        'Valitud ✓' if selected else 'Vali ›',
-                        key=f'choose_group_{group}',
-                        type='primary' if selected else 'secondary',
-                        width='stretch',
-                        disabled=not source_selected,
-                        on_click=choose_material_group,
-                        args=(group,),
-                    )
 
     material_options = (
         materials_for_group(st.session_state.material_group, require_format=require_catalog_format)
@@ -229,33 +202,36 @@ with sales_tab:
     if st.session_state.sheet_format_key not in format_by_key:
         st.session_state.sheet_format_key = None
 
-    if full_sheet_selected:
+    if not source_selected:
+        st.caption('Vali esmalt lähtematerjal: täisplaat või jääk.')
+    elif full_sheet_selected:
+        # Kompaktne mitmetasemeline valik: grupp → materjal → paksus → formaat.
+        # Iga järgnev selectbox filtreerub eelmise põhjal ja on enne valikut
+        # keelatud, nii et kogu materjalivalik mahub kahte tihedasse ritta.
+        st.markdown('#### 2. Vali materjal')
         with st.container(border=True):
-            st.markdown('**Materjali valik**')
-            if st.session_state.material_group:
-                st.caption(f"Valitud grupp: {st.session_state.material_group}")
-            else:
-                st.caption('Vali ülal materjaligrupp.')
-            exact_col, thickness_col, format_col = st.columns(3)
-            with exact_col:
-                st.selectbox('Täpne materjal', material_options, index=None, placeholder='Kirjuta või vali materjal', key='material_name', disabled=not material_options, on_change=invalidate_result)
+            group_col, material_col, thickness_col = st.columns(3)
+            with group_col:
+                st.selectbox('Materjaligrupp', group_options, index=None, placeholder='Vali grupp', key='material_group', on_change=on_material_group_change)
+            with material_col:
+                st.selectbox('Täpne materjal', material_options, index=None, placeholder='Vali materjal', key='material_name', disabled=not material_options, on_change=invalidate_result)
             with thickness_col:
-                st.selectbox('Paksus', thickness_options, index=None, format_func=thickness_label, placeholder='Kirjuta või vali paksus', key='catalog_thickness_mm', disabled=not thickness_options, on_change=invalidate_result)
-            with format_col:
-                st.selectbox(
-                    'Plaadiformaat',
-                    list(format_by_key),
-                    index=None,
-                    format_func=lambda key: format_by_key[key]['label'],
-                    placeholder='Kirjuta või vali formaat',
-                    key='sheet_format_key',
-                    disabled=not format_options,
-                    on_change=invalidate_result,
-                )
+                st.selectbox('Paksus', thickness_options, index=None, format_func=thickness_label, placeholder='Vali paksus', key='catalog_thickness_mm', disabled=not thickness_options, on_change=invalidate_result)
+            st.selectbox(
+                'Plaadiformaat',
+                list(format_by_key),
+                index=None,
+                format_func=lambda key: format_by_key[key]['label'],
+                placeholder='Vali plaadiformaat',
+                key='sheet_format_key',
+                disabled=not format_options,
+                on_change=invalidate_result,
+            )
     elif st.session_state.stock_source == 'Jääk':
         st.markdown('#### 2. Sisesta jäägi ja detaili mõõdud')
 
     chosen_format = format_by_key.get(st.session_state.sheet_format_key) if st.session_state.stock_source == 'Täisplaat' else None
+    matches = []
     if chosen_format and st.session_state.catalog_thickness_mm is not None:
         matches = articles_for_selection(
             st.session_state.material_group,
@@ -264,13 +240,27 @@ with sales_tab:
             chosen_format['width_mm'],
             chosen_format['length_mm'],
         )
-        descriptions = sorted({
-            ' / '.join(part for part in (row['color'], row['variant']) if part)
-            for row in matches
-            if row['color'] or row['variant']
-        })
-        extra = f" | {', '.join(descriptions[:3])}" if descriptions else ''
-        st.caption(f"Leitud {len(matches)} artiklit{extra}. See on artiklivalik, mitte laoseis.")
+
+    # Materjali kirjeldused (omadused, kasutusalad, artiklid) ei ole enam kogu aeg
+    # nähtaval, vaid kuvatakse eraldi infosektsioonis alles siis, kui materjal ja
+    # paksus on valitud — nii püsib valikuosa kompaktne.
+    if full_sheet_selected and st.session_state.material_name and st.session_state.catalog_thickness_mm is not None:
+        group_content = GROUP_CARD_CONTENT.get(st.session_state.material_group, {})
+        with st.expander('Materjali kirjeldus ja artiklid', expanded=False):
+            if group_content.get('description'):
+                st.markdown(f"**{st.session_state.material_group}** — {group_content['description']}")
+            if group_content.get('materials'):
+                st.caption(f"Grupi materjalid: {group_content['materials']}")
+            if chosen_format:
+                descriptions = sorted({
+                    ' / '.join(part for part in (row['color'], row['variant']) if part)
+                    for row in matches
+                    if row['color'] or row['variant']
+                })
+                extra = f" | {', '.join(descriptions[:3])}" if descriptions else ''
+                st.caption(f"Leitud {len(matches)} artiklit{extra}. See on artiklivalik, mitte laoseis.")
+            else:
+                st.caption('Vali plaadiformaat, et näha sobivaid artikleid.')
 
     with st.form('calculation_form'):
         a, b, c = st.columns(3)

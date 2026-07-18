@@ -123,10 +123,10 @@ class ApplicationTests(unittest.TestCase):
             app = AppTest.from_file('app.py').run(timeout=30)
             self.assertFalse(app.exception)
             next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
-            next(button for button in app.button if button.key == 'choose_group_Kulumiskindel plast').click().run(timeout=30)
-            app.selectbox[0].select('PE500 (PE-HMW)').run(timeout=30)
-            app.selectbox[1].select(20.0).run(timeout=30)
-            app.selectbox[2].select('1000|2000').run(timeout=30)
+            app.selectbox[0].select('Kulumiskindel plast').run(timeout=30)
+            app.selectbox[1].select('PE500 (PE-HMW)').run(timeout=30)
+            app.selectbox[2].select(20.0).run(timeout=30)
+            app.selectbox[3].select('1000|2000').run(timeout=30)
             app.text_input[0].input('100').run(timeout=30)
             app.text_input[1].input('2000').run(timeout=30)
             app.number_input[0].set_value(10).run(timeout=30)
@@ -145,10 +145,10 @@ class ApplicationTests(unittest.TestCase):
         try:
             app = AppTest.from_file('app.py').run(timeout=30)
             next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
-            next(button for button in app.button if button.key == 'choose_group_Konstruktsioonplast').click().run(timeout=30)
-            app.selectbox[0].select('PE300 (PE-HD)').run(timeout=30)
-            app.selectbox[1].select(10.0).run(timeout=30)
-            app.selectbox[2].select('1500|3000').run(timeout=30)
+            app.selectbox[0].select('Konstruktsioonplast').run(timeout=30)
+            app.selectbox[1].select('PE300 (PE-HD)').run(timeout=30)
+            app.selectbox[2].select(10.0).run(timeout=30)
+            app.selectbox[3].select('1500|3000').run(timeout=30)
             app.text_input[0].input('55').run(timeout=30)
             app.text_input[1].input('2740').run(timeout=30)
             app.number_input[0].set_value(500).run(timeout=30)
@@ -195,10 +195,10 @@ class ApplicationTests(unittest.TestCase):
             with patch.dict(os.environ, {'ERKI_INTERNAL_MODE': '1'}):
                 app = AppTest.from_file('app.py').run(timeout=30)
                 next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
-                next(button for button in app.button if button.key == 'choose_group_Kulumiskindel plast').click().run(timeout=30)
-                app.selectbox[0].select('PE500 (PE-HMW)').run(timeout=30)
-                app.selectbox[1].select(20.0).run(timeout=30)
-                app.selectbox[2].select('1000|2000').run(timeout=30)
+                app.selectbox[0].select('Kulumiskindel plast').run(timeout=30)
+                app.selectbox[1].select('PE500 (PE-HMW)').run(timeout=30)
+                app.selectbox[2].select(20.0).run(timeout=30)
+                app.selectbox[3].select('1000|2000').run(timeout=30)
                 app.text_input[0].input('100').run(timeout=30)
                 app.text_input[1].input('2000').run(timeout=30)
                 app.number_input[0].set_value(10).run(timeout=30)
@@ -605,10 +605,10 @@ class SelectionStateTests(unittest.TestCase):
 
     def _select_full_sheet(self, app):
         next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
-        next(button for button in app.button if button.key == 'choose_group_Kulumiskindel plast').click().run(timeout=30)
-        app.selectbox[0].select('PE500 (PE-HMW)').run(timeout=30)
-        app.selectbox[1].select(20.0).run(timeout=30)
-        app.selectbox[2].select('1000|2000').run(timeout=30)
+        app.selectbox[0].select('Kulumiskindel plast').run(timeout=30)
+        app.selectbox[1].select('PE500 (PE-HMW)').run(timeout=30)
+        app.selectbox[2].select(20.0).run(timeout=30)
+        app.selectbox[3].select('1000|2000').run(timeout=30)
         return app
 
     def _calculate(self, app):
@@ -716,13 +716,13 @@ class SelectionStateTests(unittest.TestCase):
                 self._calculate(app)
                 self.assertIsNotNone(app.session_state['best_result'])
                 if change == 'group':
-                    next(b for b in app.button if b.key == 'choose_group_Konstruktsioonplast').click().run(timeout=30)
+                    app.selectbox[0].select('Konstruktsioonplast').run(timeout=30)
                 elif change == 'material':
-                    app.selectbox[0].select('PE1000 (PE-UHMW)').run(timeout=30)
+                    app.selectbox[1].select('PE1000 (PE-UHMW)').run(timeout=30)
                 elif change == 'thickness':
-                    app.selectbox[1].select(30.0).run(timeout=30)
+                    app.selectbox[2].select(30.0).run(timeout=30)
                 else:
-                    app.selectbox[2].select('1000|3000').run(timeout=30)
+                    app.selectbox[3].select('1000|3000').run(timeout=30)
                 self.assertIsNone(app.session_state['best_result'], change)
 
 
@@ -819,6 +819,63 @@ class PresentationAndHistoryTests(unittest.TestCase):
     def test_blank_actual_time_remains_blank(self):
         row = build_pending_save_row({}, self.result, self.result['blade']['blade'], False, None, None)
         self.assertIsNone(row['tegelik_aeg_sek'])
+
+
+class SalesSummaryUiTests(unittest.TestCase):
+    """UI-testid pakkumise kokkuvõtte selguse ja materjalivaliku kompaktsuse kohta."""
+
+    def _full_sheet_quote(self):
+        query_file = Path('data/arvutusparingud.csv')
+        self._original_queries = query_file.read_bytes() if query_file.exists() else None
+        self._query_file = query_file
+        app = AppTest.from_file('app.py').run(timeout=30)
+        next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
+        app.selectbox[0].select('Kulumiskindel plast').run(timeout=30)
+        app.selectbox[1].select('PE500 (PE-HMW)').run(timeout=30)
+        app.selectbox[2].select(20.0).run(timeout=30)
+        app.selectbox[3].select('1000|2000').run(timeout=30)
+        return app
+
+    def _restore(self):
+        original = getattr(self, '_original_queries', None)
+        query_file = getattr(self, '_query_file', None)
+        if query_file is None:
+            return
+        if original is None:
+            query_file.unlink(missing_ok=True)
+        else:
+            query_file.write_bytes(original)
+
+    def test_summary_shows_separate_work_material_and_total(self):
+        try:
+            app = self._full_sheet_quote()
+            app.text_input[0].input('100').run(timeout=30)
+            app.text_input[1].input('200').run(timeout=30)
+            app.number_input[0].set_value(10).run(timeout=30)
+            next(button for button in app.button if button.label == 'Arvuta pakkumine').click().run(timeout=30)
+            self.assertFalse(app.exception)
+            metric_labels = [item.label for item in app.metric]
+            self.assertIn('Tööraha (saagimine, ei sisalda materjali)', metric_labels)
+            self.assertIn('Materjali kogus', metric_labels)
+            self.assertIn('Hind kokku (ilma materjalita)', metric_labels)
+            captions = '\n'.join(item.value for item in app.caption)
+            self.assertIn('materjali €/m² hinda kalkulaator ei arvuta', captions.lower())
+        finally:
+            self._restore()
+
+    def test_material_description_hidden_until_material_selected(self):
+        try:
+            app = AppTest.from_file('app.py').run(timeout=30)
+            next(button for button in app.button if button.key == 'choose_stock_Täisplaat').click().run(timeout=30)
+            # Enne materjali/paksuse valikut ei tohi kirjelduse infosektsiooni olla.
+            self.assertFalse(any(exp.label == 'Materjali kirjeldus ja artiklid' for exp in app.expander))
+            app.selectbox[0].select('Kulumiskindel plast').run(timeout=30)
+            app.selectbox[1].select('PE500 (PE-HMW)').run(timeout=30)
+            app.selectbox[2].select(20.0).run(timeout=30)
+            # Materjal ja paksus valitud → kirjelduse infosektsioon on olemas.
+            self.assertTrue(any(exp.label == 'Materjali kirjeldus ja artiklid' for exp in app.expander))
+        finally:
+            self._restore()
 
 
 class OffcutStrategyTests(unittest.TestCase):
@@ -955,6 +1012,35 @@ class ArchitectureLayerTests(unittest.TestCase):
         from application.quote_service import single_stock_capacity
         remnant = CalcInput(5, 2000, 3000, 100, 2000, 100, stock_source='Jääk', max_stock_count=1)
         self.assertEqual(single_stock_capacity(remnant), max_single_stock_capacity(remnant))
+
+    def test_price_summary_separates_work_material_and_total(self):
+        from application.quote_service import build_price_summary, compute_quote
+        best, _ = compute_quote(inp(count=10))
+        summary = build_price_summary(best)
+        # Tavatöös pole täpsuslõikuse lisatasu: tööraha == põhitööraha == kokku.
+        self.assertFalse(summary['has_extra_work'])
+        self.assertEqual(summary['precision_surcharge_eur'], 0.0)
+        self.assertAlmostEqual(summary['base_work_fee_eur'], best['work_fee_eur'], places=6)
+        self.assertAlmostEqual(summary['total_eur'], best['total_estimated_cost_eur'], places=6)
+        # Materjali €/m² hinda andmestikus pole, seega kuvatakse pindala ja
+        # märgitakse, et hind kokku ei sisalda materjali maksumust.
+        self.assertFalse(summary['material_cost_known'])
+        self.assertFalse(summary['total_includes_material'])
+        self.assertEqual(summary['material_area_m2'], best['material_needed_area_m2'])
+
+    def test_price_summary_shows_precision_extra_work_separately(self):
+        from application.quote_service import build_price_summary, compute_quote
+        best, _ = compute_quote(inp(count=10, precision=True))
+        summary = build_price_summary(best)
+        # Täpsuslõikus lisab omaette „võimalikud lisatööd" rea, mis on positiivne
+        # ja mille võrra põhitööraha jääb kogu töörahast väiksemaks.
+        self.assertTrue(summary['has_extra_work'])
+        self.assertGreater(summary['precision_surcharge_eur'], 0.0)
+        self.assertAlmostEqual(
+            summary['base_work_fee_eur'] + summary['precision_surcharge_eur'],
+            best['work_fee_eur'],
+            places=6,
+        )
 
 
 if __name__ == '__main__':

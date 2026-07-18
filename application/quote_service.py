@@ -42,3 +42,39 @@ def single_stock_capacity(inp):
     sisestatud jäägist saab.
     """
     return max_single_stock_capacity(inp)
+
+
+def build_price_summary(result):
+    """Koosta pakkumise hinna jaotus selgeteks eraldi ridadeks.
+
+    UI kuvab need eraldi väljadena, et kasutajale oleks üheselt selge, millest
+    hind koosneb. Domeeni ``work_fee_eur`` on ainult saagimise (töö) tasu — see
+    EI sisalda materjali maksumust. Kui detail vajab täpsuslõikust, on selle
+    lisatasu ``precision_surcharge_eur`` juba ``work_fee_eur`` sees; siin eraldame
+    selle omaette reaks „võimalikud lisatööd", et põhitööraha jääks võrreldavaks.
+
+    Materjali €/m² hinda praegu andmestikus (``plastmaterjalid_sae_app.csv``) ei
+    ole, seega ``material_cost_eur`` on 0 ja ``material_cost_known`` on ``False``.
+    Sel juhul kuvab UI materjali PINDALA (m²) ja märgib, et hind kokku ei sisalda
+    materjali maksumust.
+    """
+    work_fee = float(result.get('work_fee_eur', 0.0))
+    surcharge = (
+        float(result.get('precision_surcharge_eur', 0.0))
+        if result.get('precision_cut') else 0.0
+    )
+    # Põhitööraha = kogu tööraha miinus täpsuslõikuse lisatasu (kui see on).
+    base_work_fee = max(0.0, work_fee - surcharge)
+    material_cost = float(result.get('material_cost_eur', 0.0))
+    material_cost_known = material_cost > 0.0
+    total = float(result.get('total_estimated_cost_eur', work_fee))
+    return {
+        'base_work_fee_eur': base_work_fee,
+        'precision_surcharge_eur': surcharge,
+        'has_extra_work': surcharge > 0.0,
+        'material_cost_eur': material_cost,
+        'material_area_m2': float(result.get('material_needed_area_m2', 0.0)),
+        'material_cost_known': material_cost_known,
+        'total_eur': total,
+        'total_includes_material': material_cost_known,
+    }

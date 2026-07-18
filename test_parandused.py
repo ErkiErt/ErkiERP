@@ -1162,6 +1162,102 @@ class PackingTests(unittest.TestCase):
         self.assertEqual(service_plan['method'], domain_plan['method'])
         self.assertEqual(service_plan.get('box_name'), domain_plan.get('box_name'))
 
+    def test_box_prices_use_kek_km_column(self):
+        from domain.packing import BOX_CATALOG
+        prices = {box.name: box.price_eur for box in BOX_CATALOG}
+        self.assertAlmostEqual(prices['200×150×120'], 1.22, places=4)
+        self.assertAlmostEqual(prices['350×250×200'], 1.0248, places=4)
+        self.assertAlmostEqual(prices['360×250×250'], 1.0248, places=4)
+        self.assertAlmostEqual(prices['400×300×220'], 1.22, places=4)
+        self.assertAlmostEqual(prices['590×380×250'], 1.7812, places=4)
+        self.assertAlmostEqual(prices['590×380×400'], 2.1228, places=4)
+
+    def test_box5_price_is_calculated_from_kek(self):
+        from domain.packing import BOX_CATALOG
+        prices = {box.name: box.price_eur for box in BOX_CATALOG}
+        # 440×310×270 "Kek +KM" oli tühi → arvutatud Kek 1.29 × 1.22 ≈ 1.5738.
+        self.assertAlmostEqual(prices['440×310×270'], 1.5738, places=4)
+
+    def test_pallet_price_constants(self):
+        from domain.packing import FULL_PALLET_PRICE_EUR, HALF_PALLET_PRICE_EUR
+        self.assertEqual(FULL_PALLET_PRICE_EUR, 6.00)
+        self.assertEqual(HALF_PALLET_PRICE_EUR, 4.00)
+
+    def test_box_plan_packaging_price(self):
+        from domain.packing import select_box
+        # Väike detail → väikseim kast (200×150×120, 1.22 €), 1 kast, ei soovita alust.
+        plan = select_box(120, 90, 5, 10)
+        self.assertEqual(plan['box_name'], '200×150×120')
+        self.assertEqual(plan['box_count'], 1)
+        self.assertAlmostEqual(plan['packaging_line_total_eur'], 1.22, places=4)
+        self.assertEqual(plan['pallet_price_eur'], 0.0)
+        self.assertAlmostEqual(plan['packaging_total_eur'], 1.22, places=4)
+
+    def test_box_plan_adds_half_pallet_for_three_largest(self):
+        from domain.packing import select_box
+        plan = select_box(370, 550, 20, 5)  # mahub ainult 3 suurima hulka
+        self.assertTrue(plan['recommend_pallet'])
+        self.assertEqual(plan['pallet_kind'], 'half')
+        self.assertEqual(plan['pallet_price_eur'], 4.00)
+        # Kokku = kastid + poolik euraalus.
+        self.assertAlmostEqual(
+            plan['packaging_total_eur'],
+            plan['packaging_line_total_eur'] + 4.00,
+            places=4,
+        )
+
+    def test_box_plan_multi_box_multiplies_price(self):
+        from domain.packing import select_box
+        plan = select_box(120, 90, 20, 100000)
+        self.assertGreater(plan['box_count'], 1)
+        self.assertAlmostEqual(
+            plan['packaging_line_total_eur'],
+            round(plan['box'].price_eur * plan['box_count'], 4),
+            places=4,
+        )
+
+    def test_pallet_plan_uses_full_pallet_price(self):
+        from domain.packing import select_strip_packing
+        plan = select_strip_packing(30, 1500, 10, 50)
+        self.assertEqual(plan['method'], 'pallet')
+        self.assertEqual(plan['pallet_kind'], 'full')
+        self.assertEqual(plan['pallet_price_eur'], 6.00)
+        self.assertAlmostEqual(plan['packaging_total_eur'], 6.00, places=4)
+
+    def test_bundle_and_wrap_have_no_priced_packaging(self):
+        from domain.packing import select_strip_packing
+        bundle = select_strip_packing(40, 1000, 10, 30)
+        wrap = select_strip_packing(15, 800, 8, 10)
+        self.assertEqual(bundle['packaging_total_eur'], 0.0)
+        self.assertEqual(wrap['packaging_total_eur'], 0.0)
+
+    def test_box_capacity_concrete_volume_limited(self):
+        from domain.packing import BOX_CATALOG, box_capacity
+        box4 = next(b for b in BOX_CATALOG if b.name == '400×300×220')  # 26.4 l
+        # 100×100×50 mm detail: kasutatav maht 26.4×0.8=21.12 l, detail 0.5 l →
+        # ruumala 42 tk; mõõdupõhine mahutavus 48 → min = 42.
+        self.assertEqual(box_capacity(100, 100, 50, box4), 42)
+
+    def test_box_capacity_concrete_dimension_limited(self):
+        from domain.packing import BOX_CATALOG, box_capacity, dimensional_capacity
+        box4 = next(b for b in BOX_CATALOG if b.name == '400×300×220')
+        # 150×150×100 mm detail: ruumala annaks 9, kuid mõõdupõhiselt mahub 8 →
+        # min = 8 (arvutus ei ületa reaalset mahtu).
+        self.assertEqual(dimensional_capacity(150, 150, 100, box4), 8)
+        self.assertEqual(box_capacity(150, 150, 100, box4), 8)
+
+    def test_packing_instruction_lines_show_packaging_price(self):
+        from utils import packing_instruction_lines
+        result = build_best_result_for_blade(LARGE_BLADE, inp(detail_w=120, detail_l=90, count=10))
+        joined = ' '.join(packing_instruction_lines(result))
+        self.assertIn('Kastid:', joined)
+        self.assertIn('Pakendi hind kokku:', joined)
+
+    def test_print_sheet_shows_packaging_price(self):
+        result = build_best_result_for_blade(LARGE_BLADE, inp(detail_w=120, detail_l=90, count=10))
+        html = build_printable_cut_sheet(result)
+        self.assertIn('Pakendi hind kokku', html)
+
     def test_packing_domain_does_not_import_streamlit(self):
         import subprocess
         import sys

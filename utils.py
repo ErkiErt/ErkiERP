@@ -112,17 +112,43 @@ def _packing_method_lines(plan):
     return []
 
 
+def _packing_price_lines(plan):
+    """Sõnasta valitud pakendi hind eraldi ridadel + „Pakendi hind kokku".
+
+    NB: SISEMINE tootmisjuhis — pakendi hind EI lähe kliendi „Pakkumise
+    kokkuvõttesse".
+    """
+    lines = []
+    method = plan['method']
+    if method == 'box':
+        lines.append(
+            f"Kastid: {plan['packaging_count']} × "
+            f"{fmt(plan['packaging_unit_price_eur'], 2, '€')} = "
+            f"{fmt(plan['packaging_line_total_eur'], 2, '€')}."
+        )
+        if plan.get('pallet_kind') == 'half':
+            lines.append(f"Poolik euraalus: {fmt(plan['pallet_price_eur'], 2, '€')}.")
+    elif method == 'pallet':
+        lines.append(f"EUR-alus (täisalus): {fmt(plan['pallet_price_eur'], 2, '€')}.")
+        lines.append('Pakkekile — hinda andmestikus ei ole (ei arvestata).')
+    elif method in ('bundle', 'simple_wrap'):
+        lines.append('Pakkekile — hinda andmestikus ei ole (ei arvestata).')
+    lines.append(f"Pakendi hind kokku: {fmt(plan['packaging_total_eur'], 2, '€')}.")
+    return lines
+
+
 def packing_instruction_lines(result):
     """Koosta „Paki toodang" sektsiooni read (SISEMINE tootmisjuhis, mitte hind).
 
-    Read: (1) pakkimismeetodi soovitus + hinnanguline aeg, (2) „Markeeri
-    kleepsud", (3) kui lõikest jäi taaskasutatav jääk, siis „Jääk: … — märgi
-    jäägile mõõt".
+    Read: (1) pakkimismeetodi soovitus + hinnanguline aeg, (2) valitud pakendi
+    hind eraldi ridadel + „Pakendi hind kokku", (3) „Markeeri kleepsud", (4) kui
+    lõikest jäi taaskasutatav jääk, siis „Jääk: … — märgi jäägile mõõt".
     """
     from application.packing_service import build_packing_plan_for_result
 
     plan = build_packing_plan_for_result(result)
     lines = _packing_method_lines(plan)
+    lines.extend(_packing_price_lines(plan))
     lines.append('Markeeri kleepsud — paigalda kinnitus-/markeeringuetiketid pakendile.')
     offcut = result.get('largest_usable_offcut')
     if offcut:

@@ -21,6 +21,7 @@ Dokumenteeritud eeldused (kokku võetud ka failis ``SUMMARY_FAAS_C.md``):
 
 import math
 from dataclasses import dataclass
+from itertools import permutations
 
 
 @dataclass(frozen=True)
@@ -44,18 +45,28 @@ class Box:
         return tuple(sorted((self.length_mm, self.width_mm, self.height_mm), reverse=True))
 
 
-# Tehpacki lainepapikastid (sisemõõdud L×W×H mm, hind KM-ga). Kasti 5 kõrgus on
-# tegelikult 270–320 mm; mahutavuse arvutuses kasutame turvalisemat 270 mm, et
-# mitte üle hinnata mahutavust.
+# Lainepapikastid (sisemõõdud L×W×H mm, hind KM-ga €). Hinnad on Exceli
+# "Kek +KM" veerust (kasutaja täpsustus: „kek nimelise rea hindadega"), mitte
+# Tehpacki veerust. Kasti 5 (440×310×270/320) "Kek +KM" lahter oli algandmestikus
+# TÜHI — arvutasime selle olemasolevast "Kek" hinnast (1.29 €), korrutades sama
+# KM-teguriga, mis kehtib teistel ridadel (Kek+KM / Kek ≈ 1.22, st ~22% KM):
+# 1.29 × 1.22 ≈ 1.5738 €. See on dokumenteeritud eeldus (vt SUMMARY_FAAS_C.md).
+# Kasti 5 kõrgus on tegelikult 270–320 mm; mahutavuse arvutuses kasutame
+# turvalisemat 270 mm, et mitte üle hinnata mahutavust.
 BOX_CATALOG = (
-    Box('200×150×120', 200, 150, 120, 0.17),
-    Box('350×250×200', 350, 250, 200, 0.57),
-    Box('360×250×250', 360, 250, 250, 0.60),
-    Box('400×300×220', 400, 300, 220, 0.66),
-    Box('440×310×270', 440, 310, 270, 0.83),
-    Box('590×380×250', 590, 380, 250, 1.04),
-    Box('590×380×400', 590, 380, 400, 1.00),
+    Box('200×150×120', 200, 150, 120, 1.22),
+    Box('350×250×200', 350, 250, 200, 1.0248),
+    Box('360×250×250', 360, 250, 250, 1.0248),
+    Box('400×300×220', 400, 300, 220, 1.22),
+    Box('440×310×270', 440, 310, 270, 1.5738),  # arvutatud (Kek 1.29 × 1.22)
+    Box('590×380×250', 590, 380, 250, 1.7812),
+    Box('590×380×400', 590, 380, 400, 2.1228),
 )
+
+# Aluse hinnad (KM-ga €). Täisalus = EUR-alus (riba pikkus >1020 mm → alusele);
+# poolik euraalus = kolme suurima kasti soovitus.
+FULL_PALLET_PRICE_EUR = 6.00
+HALF_PALLET_PRICE_EUR = 4.00
 
 # Ladumise ebaefektiivsuse turvavaru: reaalselt ei saa kasti sisemahtu 100%
 # täita (õhuvahed, detailide jäik kuju). Kasutame 20% varu (spetsis lubatud
@@ -106,11 +117,32 @@ def detail_fits_in_box(detail_w, detail_l, detail_thickness, box):
     return all(p <= b + 1e-6 for p, b in zip(part, box.sorted_dims_mm))
 
 
-def box_capacity(detail_w, detail_l, detail_thickness, box):
-    """Ligikaudne detailide arv ühes kastis ruumala + turvavaru baasil.
+def dimensional_capacity(detail_w, detail_l, detail_thickness, box):
+    """Mitu detaili mahub kasti puhtalt telgjoondatud ladumisel (parim orientatsioon).
 
-    Kui detail mahub kasti mõõtmeliselt, on mahutavus vähemalt 1, isegi kui
-    ruumala + turvavaru annaks 0 (nt üksik paks detail).
+    Proovib kõik detaili 6 orientatsiooni kasti mõõtude vastu ja tagastab suurima
+    ruudustiku-mahutavuse (mm-täpne). See on ülempiir, mida ruumala-hinnang ei
+    tohi ületada (nt paks detail, mida ei saa lõputult virnastada).
+    """
+    dims = (float(detail_w), float(detail_l), float(detail_thickness))
+    box_dims = (box.length_mm, box.width_mm, box.height_mm)
+    best = 0
+    for perm in set(permutations(dims)):
+        if all(p <= b + 1e-6 for p, b in zip(perm, box_dims)) and all(p > 0 for p in perm):
+            count = 1
+            for p, b in zip(perm, box_dims):
+                count *= int((b + 1e-6) // p)
+            best = max(best, count)
+    return best
+
+
+def box_capacity(detail_w, detail_l, detail_thickness, box):
+    """Detailide arv ühes kastis: ruumala + turvavaru, piiratud mõõdupõhise mahuga.
+
+    Ruumala-hinnang (80% sisemahust) annab tiheda pakkimise ligikaudse arvu;
+    mõõdupõhine ``dimensional_capacity`` on füüsiline ülempiir. Võtame nende
+    miinimumi, et arvutus jääks matemaatiliselt korrektseks (ei ületa reaalset
+    mahtu). Kui detail mahub kasti mõõtmeliselt, on mahutavus vähemalt 1.
     """
     if not detail_fits_in_box(detail_w, detail_l, detail_thickness, box):
         return 0
@@ -118,21 +150,34 @@ def box_capacity(detail_w, detail_l, detail_thickness, box):
     if detail_vol_l <= 0:
         return 0
     usable = box.volume_l * (1 - BOX_PACKING_SAFETY_MARGIN)
-    return max(1, int(usable // detail_vol_l))
+    volume_based = int(usable // detail_vol_l)
+    dimensional = dimensional_capacity(detail_w, detail_l, detail_thickness, box)
+    return max(1, min(volume_based, dimensional))
 
 
 def _box_plan(box, box_count, capacity, count):
+    # Poolik euraalus soovitatakse, kui valitud kast on üks kolmest suurimast.
+    recommend_pallet = box in three_largest_boxes()
+    box_line_total = round(box.price_eur * box_count, 4)
+    pallet_price = HALF_PALLET_PRICE_EUR if recommend_pallet else 0.0
     return {
         'method': 'box',
         'box': box,
         'box_name': box.name,
         'box_count': box_count,
         'capacity_per_box': capacity,
-        # Poolik euraalus soovitatakse, kui valitud kast on üks kolmest suurimast.
-        'recommend_pallet': box in three_largest_boxes(),
+        'recommend_pallet': recommend_pallet,
         'assembly_sec': BOX_ASSEMBLY_SEC * box_count,
         'estimated_sec': BOX_ASSEMBLY_SEC * box_count,
         'detail_count': count,
+        # Hinnad (SISEMINE tootmisjuhis, EI lähe kliendi hinnapakkumisse).
+        'packaging_label': f'Kast {box.name} mm',
+        'packaging_unit_price_eur': box.price_eur,
+        'packaging_count': box_count,
+        'packaging_line_total_eur': box_line_total,
+        'pallet_kind': 'half' if recommend_pallet else None,
+        'pallet_price_eur': pallet_price,
+        'packaging_total_eur': round(box_line_total + pallet_price, 4),
     }
 
 
@@ -198,6 +243,14 @@ def select_strip_packing(detail_w, detail_l, detail_thickness, count):
             'estimated_sec': STRIP_PALLET_SEC,
             'recommend_pallet': True,
             'detail_count': count,
+            # Hinnad (SISEMINE tootmisjuhis).
+            'packaging_label': 'Pakkekile alusel',
+            'packaging_unit_price_eur': 0.0,  # pakkekile hinda andmestikus ei ole
+            'packaging_count': 1,
+            'packaging_line_total_eur': 0.0,
+            'pallet_kind': 'full',
+            'pallet_price_eur': FULL_PALLET_PRICE_EUR,
+            'packaging_total_eur': round(FULL_PALLET_PRICE_EUR, 4),
         }
 
     # Reegel 1: pikkus < 1000 mm JA laius < 20 mm JA väike kogus → lihtne
@@ -216,6 +269,14 @@ def select_strip_packing(detail_w, detail_l, detail_thickness, count):
             'estimated_sec': 2 * STRIP_END_WRAP_SEC,  # 2 otsa
             'recommend_pallet': False,
             'detail_count': count,
+            # Hinnad (SISEMINE tootmisjuhis).
+            'packaging_label': 'Pakkekile',
+            'packaging_unit_price_eur': 0.0,  # pakkekile hinda andmestikus ei ole
+            'packaging_count': 1,
+            'packaging_line_total_eur': 0.0,
+            'pallet_kind': None,
+            'pallet_price_eur': 0.0,
+            'packaging_total_eur': 0.0,
         }
 
     # Reegel 2: pikkus ≤ 1020 mm → kimpu, otsad kilega. 120 sek ots (240 sek
@@ -229,6 +290,14 @@ def select_strip_packing(detail_w, detail_l, detail_thickness, count):
         'estimated_sec': bundles * 2 * STRIP_END_WRAP_SEC,
         'recommend_pallet': False,
         'detail_count': count,
+        # Hinnad (SISEMINE tootmisjuhis).
+        'packaging_label': 'Pakkekile (kimp)',
+        'packaging_unit_price_eur': 0.0,  # pakkekile hinda andmestikus ei ole
+        'packaging_count': bundles,
+        'packaging_line_total_eur': 0.0,
+        'pallet_kind': None,
+        'pallet_price_eur': 0.0,
+        'packaging_total_eur': 0.0,
     }
 
 

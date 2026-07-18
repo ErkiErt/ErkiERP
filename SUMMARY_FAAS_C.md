@@ -29,24 +29,55 @@ Lainepapikastid struktureeritud konstantidena (`Box`: nimi, sisemõõt L×W×H m
 hind KM-ga, arvutatav ruumala). Neid saab hõlpsasti muuta ilma mujal koodi
 katki tegemata.
 
-| Kast (mm) | Hind (€) | Ruumala (l) |
-|-----------|----------|-------------|
-| 200×150×120 | 0.17 | 3.6 |
-| 350×250×200 | 0.57 | 17.5 |
-| 360×250×250 | 0.60 | 22.5 |
-| 400×300×220 | 0.66 | 26.4 |
-| 440×310×270 | 0.83 | 36.8 |
-| 590×380×250 | 1.04 | 56.1 |
-| 590×380×400 | 1.00 | 89.7 |
+Hinnad on Exceli **"Kek +KM"** veerust (KM-ga €), vt hinnaeeldused allpool.
+
+| Kast (mm) | Hind (€, Kek +KM) | Ruumala (l) |
+|-----------|-------------------|-------------|
+| 200×150×120 | 1.22 | 3.6 |
+| 350×250×200 | 1.0248 | 17.5 |
+| 360×250×250 | 1.0248 | 22.5 |
+| 400×300×220 | 1.22 | 26.4 |
+| 440×310×270 | 1.5738 (arvutatud) | 36.8 |
+| 590×380×250 | 1.7812 | 56.1 |
+| 590×380×400 | 2.1228 | 89.7 |
 
 ## „Paki toodang" sisu
 
 1. Pakkimismeetodi soovitus + hinnanguline aeg (kasti- VÕI riba-loogika,
    olenevalt detaili mõõtudest).
-2. „Markeeri kleepsud — paigalda kinnitus-/markeeringuetiketid pakendile."
-3. Kui lõikest jäi taaskasutatav jääk: „Jääk: [pikkus] × [laius] mm — märgi
+2. Valitud pakendi hind eraldi ridadel: kastid (kogus × ühikuhind = rida),
+   poolik euraalus (kui rakendub) või EUR-alus (riba-alusepakkimisel), ning
+   selge **„Pakendi hind kokku"** rida. Pakkekile hinda andmestikus ei ole,
+   seega kilepakkimise/kimpude puhul on pakendi hind kokku 0.00 €.
+3. „Markeeri kleepsud — paigalda kinnitus-/markeeringuetiketid pakendile."
+4. Kui lõikest jäi taaskasutatav jääk: „Jääk: [pikkus] × [laius] mm — märgi
    jäägile mõõt." (kasutab `result['largest_usable_offcut']`). Kui jääki ei
    jäänud, rida jäetakse ära.
+
+**NB:** pakendi hind on SISEMINE tootmisjuhis — seda EI lisata kliendi
+„Pakkumise kokkuvõttesse".
+
+## Pakendi hinna arvutus
+
+- **Kasti hind** = kasti "Kek +KM" ühikuhind × kastide arv.
+- **Poolik euraalus** (4.00 €) lisatakse, kui valitud kast on üks kolmest
+  suurimast (poolik-euraaluse soovitus).
+- **EUR-alus / täisalus** (6.00 €) lisatakse, kui riba pakitakse alusele
+  (pikkus >1020 mm loogika).
+- **Pakendi hind kokku** = kastid/kile + alus/poolikalus (kui rakendub).
+
+## Mahutavusarvutuse ülevaatus (matemaatiline korrektsus)
+
+Kastivalik kasutab nüüd kahe piiri miinimumi, et arvutus ei ületaks reaalset
+mahtu:
+- **Ruumala-hinnang:** `(80% kasti sisemahust) / detaili ruumala` (tihe
+  pakkimine + 20% turvavaru).
+- **Mõõdupõhine ülempiir** (`dimensional_capacity`): parim telgjoondatud
+  ruudustik üle detaili 6 orientatsiooni — füüsiline maksimum.
+- **Mahutavus = max(1, min(ruumala, mõõdupõhine))**.
+
+Näited testides: 100×100×50 mm → kasti 400×300×220 mahub 42 tk (ruumala piirab);
+150×150×100 mm → sama kasti mahub 8 tk (mõõt piirab, ruumala annaks 9).
 
 ---
 
@@ -116,7 +147,34 @@ Kui valitud kast on üks kolmest suurimast ruumala järgi (**590×380×400,
 Riba-alusepakkimisel on „poolik euraalus" alati asjakohane (alus on niikuinii
 kasutusel), kuid soovitusrida on seotud spetsi järgi kasti-valikuga.
 
-### 11. „Jääk" rida kasutab `largest_usable_offcut`
+### 11. Kastide hinnad = Exceli "Kek +KM" veerg
+Kasutaja täpsustus: „kek nimelise rea hindadega" → kasutame "Kek +KM" veergu
+(mitte Tehpacki). Väärtused: 200×150×120=1.22, 350×250×200=1.0248,
+360×250×250=1.0248, 400×300×220=1.22, 590×380×250=1.7812, 590×380×400=2.1228 €.
+
+### 12. Kasti 440×310×270/320 "Kek +KM" hind = ARVUTATUD 1.5738 €
+Algandmestikus oli selle kasti "Kek +KM" lahter **TÜHI**. Arvutasime selle
+olemasolevast "Kek" hinnast (1.29 €), korrutades sama KM-teguriga, mis kehtib
+teistel ridadel (Kek+KM / Kek ≈ 1.22, st ~22% KM): **1.29 × 1.22 ≈ 1.5738 €**.
+See on eeldus — palun kinnita tegelik "Kek +KM" hind, kui see on teada.
+
+### 13. Aluse hinnad: täisalus (EUR-alus) 6.00 €, poolik euraalus 4.00 €
+`FULL_PALLET_PRICE_EUR = 6.00`, `HALF_PALLET_PRICE_EUR = 4.00`. Täisalus
+lisatakse riba-alusepakkimisel (>1020 mm), poolik euraalus kolme suurima kasti
+soovituse korral.
+
+### 14. Pakkekile hinda ei ole → kilepakkimine 0.00 €
+Pakkekile/kilelindi hinda andmestikus ei antud, seega lihtsa pakkimise ja
+kimpude „Pakendi hind kokku" on 0.00 € (arvestame ainult teadaolevaid pakendi
+hindu: kastid ja alused). Kui kile hind on teada, saab selle lisada.
+
+### 15. Mahutavus = min(ruumala-hinnang, mõõdupõhine ülempiir)
+Ruumala-hinnang võib üksi üle hinnata (nt paks detail, mida ei saa lõputult
+virnastada). Lisasime mõõdupõhise ülempiiri (`dimensional_capacity`), et
+mahutavus jääks füüsiliselt korrektseks. Endised eeldused (turvavaru 20% jne)
+kehtivad edasi.
+
+### 16. „Jääk" rida kasutab `largest_usable_offcut`
 „Paki toodang" jäägirida kasutab olemasolevat domeeni välja
 `result['largest_usable_offcut']` (taaskasutatav jääk, mis niikuinii riiulisse
 läheb). Kui soovid, et rida ilmuks ka mitte-taaskasutatava jäägi korral, tuleb

@@ -1,6 +1,12 @@
 from html import escape
 
-from utils import dimension_text, material_need_lines, offcut_label, work_order_steps
+from utils import (
+    dimension_text,
+    material_need_lines,
+    offcut_label,
+    packing_instruction_lines,
+    work_order_steps,
+)
 
 
 def _positions(count, limit=80):
@@ -103,6 +109,10 @@ def build_printable_cut_sheet(result):
         stock_check = '<p class="notice"><strong>Enne täisplaadi lõikust kontrolli, kas sobivat jääki pole riiulis või boksides.</strong></p>'
     steps = work_order_steps(result)
     step_html = ''.join(f'<li>{escape(step)}</li>' for step in steps)
+    # Paki toodang: sisemine tootmisjuhis (ei mõjuta kliendi hinda).
+    packing_html = ''.join(
+        f'<li>{escape(line)}</li>' for line in packing_instruction_lines(result)
+    )
     schemes = []
     layout_rows = []
     if result.get('stock_source') == 'Jääk':
@@ -173,5 +183,6 @@ li {{ margin:1.2mm 0; }} .no-print {{ margin-bottom:4mm; }}
 <p><strong>Lõiked:</strong> {result['longitudinal_cut_count']} piki + {result['cross_cut_count']} risti</p>
 {offcut_html}
 </section><section class="box"><h2>Tööjärjekord</h2><ol>{step_html}</ol></section></div>
+<div class="grid"><section class="box"><h2>Paki toodang</h2><ul>{packing_html}</ul></section></div>
 <h2>Lõikeskeem</h2><div class="schemes">{scheme_html}</div>
 </body></html>'''

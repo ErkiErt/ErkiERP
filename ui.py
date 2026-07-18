@@ -12,7 +12,15 @@ from matplotlib.patches import Rectangle
 import streamlit as st
 
 from application.quote_service import build_price_summary
-from utils import dimension_text, fmt, material_need_lines, offcut_label, sec_to_minsec, work_order_steps
+from utils import (
+    dimension_text,
+    fmt,
+    material_need_lines,
+    offcut_label,
+    packing_instruction_lines,
+    sec_to_minsec,
+    work_order_steps,
+)
 
 BLUE = '#1f6fb2'
 LIGHT_BLUE = '#d7eaf8'
@@ -143,6 +151,11 @@ def render_cutting_details(result):
     st.markdown('#### Tööjärjekord')
     for number, step in enumerate(work_order_steps(result), 1):
         st.markdown(f'{number}. {step}')
+
+    # Paki toodang: sisemine tootmisjuhis (ei mõjuta kliendi hinda).
+    st.markdown('#### Paki toodang')
+    for line in packing_instruction_lines(result):
+        st.markdown(f'- {line}')
 
     st.markdown('#### Ajajaotus')
     metric_count = 3 + int(result['precision_cut']) + int(bool(result.get('dust_bag_change_sec')))

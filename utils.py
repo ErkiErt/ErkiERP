@@ -79,6 +79,60 @@ def offcut_label(offcut):
     return f"{offcut['name']}: {dimension_text(offcut['width_mm'])} × {dimension_text(offcut['length_mm'])} mm"
 
 
+def _packing_method_lines(plan):
+    """Sõnasta pakkimismeetodi read (kast VÕI riba) koos hinnangulise ajaga."""
+    method = plan['method']
+    if method == 'box':
+        lines = [
+            f"Paki kasti {plan['box_name']} mm — {plan['box_count']} kast(i), "
+            f"kuni {plan['capacity_per_box']} detaili kasti kohta. Pane kast kokku "
+            f"enne täitmist (30 sek/kast), kokku ~{sec_to_minsec(plan['assembly_sec'])}."
+        ]
+        if plan['recommend_pallet']:
+            lines.append('Soovitatav tuua poolik euraalus.')
+        return lines
+    if method == 'pallet':
+        return [
+            'Paki alusele (palett) — ladu ribad alusele võimalikult tihedalt ja '
+            'korrastatult, et alusepealne ruum efektiivselt ära kasutada. '
+            f"Hinnanguline aeg ~{sec_to_minsec(plan['estimated_sec'])}."
+        ]
+    if method == 'simple_wrap':
+        return [
+            'Lihtne pakkimine — tõmba ribad pakkekilega mõlemast otsast kokku '
+            '(alust ei kasutata). 120 sek ots, kokku '
+            f"~{sec_to_minsec(plan['estimated_sec'])}."
+        ]
+    if method == 'bundle':
+        return [
+            f"Paki ribad kimpu (kuni 500 mm lai, kuni 600 mm kõrge) ja tõmba otsad "
+            f"pakkekilega korralikult kinni. {plan['bundle_count']} kimp(u), "
+            f"120 sek ots (2 otsa/kimp), kokku ~{sec_to_minsec(plan['estimated_sec'])}."
+        ]
+    return []
+
+
+def packing_instruction_lines(result):
+    """Koosta „Paki toodang" sektsiooni read (SISEMINE tootmisjuhis, mitte hind).
+
+    Read: (1) pakkimismeetodi soovitus + hinnanguline aeg, (2) „Markeeri
+    kleepsud", (3) kui lõikest jäi taaskasutatav jääk, siis „Jääk: … — märgi
+    jäägile mõõt".
+    """
+    from application.packing_service import build_packing_plan_for_result
+
+    plan = build_packing_plan_for_result(result)
+    lines = _packing_method_lines(plan)
+    lines.append('Markeeri kleepsud — paigalda kinnitus-/markeeringuetiketid pakendile.')
+    offcut = result.get('largest_usable_offcut')
+    if offcut:
+        lines.append(
+            f"Jääk: {dimension_text(offcut['length_mm'])} × "
+            f"{dimension_text(offcut['width_mm'])} mm — märgi jäägile mõõt."
+        )
+    return lines
+
+
 def work_order_steps(result):
     """Build the same operator sequence for the screen and printable cut sheet.
 

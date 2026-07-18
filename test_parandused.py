@@ -1043,5 +1043,136 @@ class ArchitectureLayerTests(unittest.TestCase):
         )
 
 
+class PackingTests(unittest.TestCase):
+    """Faas C: pakkimisjuhise loogika (kastid, ribad, poolik euraalus)."""
+
+    def test_box_catalog_and_three_largest(self):
+        from domain.packing import BOX_CATALOG, three_largest_boxes
+        self.assertEqual(len(BOX_CATALOG), 7)
+        names = {box.name for box in three_largest_boxes()}
+        # Kolm suurimat ruumala järgi.
+        self.assertEqual(names, {'590×380×400', '590×380×250', '440×310×270'})
+
+    def test_detail_fits_in_box_uses_all_three_dimensions(self):
+        from domain.packing import BOX_CATALOG, detail_fits_in_box
+        small_box = BOX_CATALOG[0]  # 200×150×120
+        # 190×140×10 mahub mistahes orientatsioonis.
+        self.assertTrue(detail_fits_in_box(140, 190, 10, small_box))
+        # 210 mm külg ei mahu ühtegi 200 mm mõõtu.
+        self.assertFalse(detail_fits_in_box(210, 140, 10, small_box))
+
+    def test_select_box_picks_smallest_fitting_box(self):
+        from domain.packing import select_box
+        plan = select_box(120, 90, 5, 10)
+        self.assertEqual(plan['method'], 'box')
+        self.assertEqual(plan['box_name'], '200×150×120')
+        self.assertEqual(plan['box_count'], 1)
+        self.assertFalse(plan['recommend_pallet'])
+
+    def test_select_box_recommends_pallet_for_three_largest(self):
+        from domain.packing import select_box
+        # Suur lapik detail mahub ainult kolme suurima kasti hulka.
+        plan = select_box(370, 550, 20, 5)
+        self.assertEqual(plan['method'], 'box')
+        self.assertIn(plan['box_name'], {'590×380×400', '590×380×250', '440×310×270'})
+        self.assertTrue(plan['recommend_pallet'])
+
+    def test_select_box_uses_multiple_boxes_when_order_too_big(self):
+        from domain.packing import select_box
+        # Väike detail, kuid tohutu kogus → ei mahu ühte kasti.
+        plan = select_box(120, 90, 20, 100000)
+        self.assertEqual(plan['method'], 'box')
+        self.assertGreater(plan['box_count'], 1)
+        self.assertEqual(plan['assembly_sec'], 30 * plan['box_count'])
+
+    def test_is_strip_ratio(self):
+        from domain.packing import is_strip
+        self.assertTrue(is_strip(15, 900))   # 60× → riba
+        self.assertFalse(is_strip(200, 300))  # 1,5× → mitte riba
+
+    def test_strip_pallet_over_1020mm(self):
+        from domain.packing import select_strip_packing
+        plan = select_strip_packing(30, 1500, 10, 50)
+        self.assertEqual(plan['method'], 'pallet')
+        self.assertEqual(plan['estimated_sec'], 10)
+        self.assertTrue(plan['recommend_pallet'])
+
+    def test_strip_1020_1200_range_uses_pallet(self):
+        from domain.packing import select_strip_packing
+        # 1020–1200 mm vahemik → alusepakkimine (dokumenteeritud eeldus).
+        plan = select_strip_packing(30, 1100, 10, 50)
+        self.assertEqual(plan['method'], 'pallet')
+
+    def test_strip_simple_wrap_short_and_narrow_small_qty(self):
+        from domain.packing import select_strip_packing
+        plan = select_strip_packing(15, 800, 8, 10)
+        self.assertEqual(plan['method'], 'simple_wrap')
+        # 120 sek × 2 otsa.
+        self.assertEqual(plan['estimated_sec'], 240)
+        self.assertFalse(plan['recommend_pallet'])
+
+    def test_strip_bundle_up_to_1020mm(self):
+        from domain.packing import select_strip_packing
+        plan = select_strip_packing(40, 1000, 10, 30)
+        self.assertEqual(plan['method'], 'bundle')
+        # 120 sek ots × 2 otsa × kimpude arv.
+        self.assertEqual(plan['estimated_sec'], plan['bundle_count'] * 240)
+
+    def test_strip_bundle_splits_when_stack_exceeds_600mm(self):
+        from domain.packing import bundle_count
+        # Paks materjal + suur kogus ühes reas → virn ületab 600 mm, mitu kimpu.
+        one_row = bundle_count(600, 100, 100)  # riba laius 600 > 500 → 1 tk/reas
+        self.assertGreater(one_row, 1)
+
+    def test_packing_instruction_lines_box_contains_markers(self):
+        from utils import packing_instruction_lines
+        result = build_best_result_for_blade(LARGE_BLADE, inp(detail_w=120, detail_l=90, count=10))
+        lines = packing_instruction_lines(result)
+        joined = ' '.join(lines)
+        self.assertIn('Paki kasti', joined)
+        self.assertIn('Markeeri kleepsud', joined)
+
+    def test_packing_instruction_lines_reports_offcut(self):
+        from utils import packing_instruction_lines
+        result = build_best_result_for_blade(LARGE_BLADE, inp(detail_w=120, detail_l=90, count=10))
+        result['largest_usable_offcut'] = {
+            'name': 'Otsajääk', 'width_mm': 500, 'length_mm': 1500, 'area_m2': 0.75,
+        }
+        lines = packing_instruction_lines(result)
+        self.assertTrue(any(line.startswith('Jääk:') and 'märgi jäägile mõõt' in line for line in lines))
+
+    def test_packing_instruction_lines_strip_uses_pallet(self):
+        from utils import packing_instruction_lines
+        result = build_best_result_for_blade(LARGE_BLADE, inp(raw_w=1000, raw_l=3000, detail_w=30, detail_l=1500, count=20))
+        lines = packing_instruction_lines(result)
+        self.assertTrue(any('alusele' in line for line in lines))
+
+    def test_print_sheet_contains_paki_toodang_section(self):
+        result = build_best_result_for_blade(LARGE_BLADE, inp(detail_w=120, detail_l=90, count=10))
+        html = build_printable_cut_sheet(result)
+        self.assertIn('Paki toodang', html)
+        self.assertIn('Markeeri kleepsud', html)
+
+    def test_packing_service_matches_domain_plan(self):
+        from application.packing_service import build_packing_plan_for_result
+        from domain.packing import build_packing_plan
+        result = build_best_result_for_blade(LARGE_BLADE, inp(detail_w=120, detail_l=90, count=10))
+        service_plan = build_packing_plan_for_result(result)
+        domain_plan = build_packing_plan(120, 90, result['thickness_mm'], 10)
+        self.assertEqual(service_plan['method'], domain_plan['method'])
+        self.assertEqual(service_plan.get('box_name'), domain_plan.get('box_name'))
+
+    def test_packing_domain_does_not_import_streamlit(self):
+        import subprocess
+        import sys
+        result = subprocess.run(
+            [sys.executable, '-c',
+             'import sys, domain.packing; '
+             'assert "streamlit" not in sys.modules, "domeen ei tohi Streamlitit importida"'],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

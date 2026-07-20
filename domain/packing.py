@@ -111,6 +111,18 @@ def three_largest_boxes():
     return boxes_by_volume_desc()[:3]
 
 
+def catalog_max_box_dimension_mm():
+    """Suurima kasti pikim sisemõõt kataloogis (dünaamiliselt, mitte hardcode'itud).
+
+    Kui detaili pikim mõõt seda ületab, ei mahu detail ühtegi kasti — sel juhul
+    rakendub alati riba-loogika, sõltumata pikkuse/laiuse suhtest.
+    """
+    return max(
+        max(box.length_mm, box.width_mm, box.height_mm)
+        for box in BOX_CATALOG
+    )
+
+
 def detail_fits_in_box(detail_w, detail_l, detail_thickness, box):
     """Kas üks detail mahub kasti (mõõdupõhine, mistahes orientatsioonis)?"""
     part = sorted((detail_w, detail_l, detail_thickness), reverse=True)
@@ -312,7 +324,13 @@ def build_packing_plan(detail_w, detail_l, detail_thickness, count):
     detail_thickness = float(detail_thickness or 0)
     count = max(1, int(count or 1))
 
-    if is_strip(detail_w, detail_l):
+    # Kui detaili pikim mõõt ületab kataloogi suurima kasti pikima sisemõõdu, ei
+    # mahu detail ühtegi kasti → kasuta ALATI riba-loogikat (pikkuse-põhised
+    # reeglid), sõltumata pikkuse/laiuse suhtest (ratio-heuristikast).
+    longest_side = max(detail_w, detail_l, detail_thickness)
+    too_long_for_any_box = longest_side > catalog_max_box_dimension_mm()
+
+    if is_strip(detail_w, detail_l) or too_long_for_any_box:
         return select_strip_packing(detail_w, detail_l, detail_thickness, count)
     plan = select_box(detail_w, detail_l, detail_thickness, count)
     if plan is None:

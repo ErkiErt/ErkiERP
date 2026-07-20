@@ -1090,6 +1090,26 @@ class PackingTests(unittest.TestCase):
         self.assertTrue(is_strip(15, 900))   # 60× → riba
         self.assertFalse(is_strip(200, 300))  # 1,5× → mitte riba
 
+    def test_catalog_max_box_dimension_is_dynamic(self):
+        from domain.packing import catalog_max_box_dimension_mm
+        # Praeguses kataloogis on suurima kasti pikim sisemõõt 590 mm, kuid
+        # väärtus arvutatakse dünaamiliselt (mitte hardcode'itud).
+        self.assertEqual(catalog_max_box_dimension_mm(), 590)
+
+    def test_detail_longer_than_any_box_always_uses_strip(self):
+        from domain.packing import (
+            build_packing_plan, catalog_max_box_dimension_mm, is_strip,
+        )
+        # Detail 650 mm pikk × 300 mm lai: suhe (650/300 ≈ 2,17) on alla 5, seega
+        # ratio-heuristika üksi EI klassifitseeriks seda ribaks. Kuid 650 mm
+        # ületab suurima kasti pikima sisemõõdu (590 mm) → detail ei mahu ühtegi
+        # kasti ja peab ikkagi saama riba-pakkimise soovituse, mitte kasti.
+        self.assertFalse(is_strip(300, 650))
+        self.assertGreater(650, catalog_max_box_dimension_mm())
+        plan = build_packing_plan(300, 650, 20, 10)
+        self.assertNotEqual(plan['method'], 'box')
+        self.assertIn(plan['method'], ('pallet', 'bundle', 'simple_wrap'))
+
     def test_strip_pallet_over_1020mm(self):
         from domain.packing import select_strip_packing
         plan = select_strip_packing(30, 1500, 10, 50)

@@ -179,3 +179,23 @@ kehtivad edasi.
 `result['largest_usable_offcut']` (taaskasutatav jääk, mis niikuinii riiulisse
 läheb). Kui soovid, et rida ilmuks ka mitte-taaskasutatava jäägi korral, tuleb
 väli vahetada `largest_any_offcut` vastu.
+
+### 17. Kasti max pikkuse reegel: detail, mis ei mahu ühtegi kasti → alati riba
+Kasutaja täpsustus: „ribad kasti ei lähe, kui need ei ole kasti max pikkusega
+sobivad." Kui detaili pikim mõõt ületab kataloogi suurima kasti pikima
+sisemõõdu, ei mahu detail ühtegi kasti → rakendub **alati** riba-loogika
+(pikkuse-põhised reeglid), sõltumata pikkuse/laiuse suhtest
+(`STRIP_LENGTH_TO_WIDTH_RATIO` heuristikast).
+
+- **Läviväärtus arvutatakse dünaamiliselt** funktsiooniga
+  `catalog_max_box_dimension_mm()` (praeguses `BOX_CATALOG`-is 590 mm), MITTE
+  hardcode'itud — kataloogi muutmisel kohandub reegel automaatselt.
+- `build_packing_plan` kontrollib: `too_long_for_any_box = longest_side >
+  catalog_max_box_dimension_mm()`. Kui `is_strip(...)` VÕI `too_long_for_any_box`,
+  siis kasutatakse `select_strip_packing`.
+- Näide testis: detail 650 mm × 300 mm (suhe ≈2,17 < 5, seega ratio-heuristika
+  üksi seda ribaks ei loeks) saab ikkagi riba-pakkimise soovituse, mitte kasti.
+
+NB: varem langes selline detail juba `select_box` → `None` tagasiläbi
+riba-loogikasse; see reegel muudab käitumise **selgesõnaliseks ja robustseks**
+(ei sõltu kaudsest tagasilangemisest).
